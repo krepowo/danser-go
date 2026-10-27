@@ -149,6 +149,8 @@ jobs:
     if: ${{ !cancelled() && needs.build_windows.result == 'success' && needs.build_linux.result == 'success' && (inputs.draft == true || inputs.draft == 'true') }}
     needs: [build_windows, build_linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v3
