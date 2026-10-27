@@ -169,14 +169,25 @@ func initGameplay() *gameplay {
 				InnerOpacity:  0.5,
 			},
 		},
-		KeyOverlay: &hudElementOffset{
-			hudElement: &hudElement{
-				Show:    true,
-				Scale:   1.0,
-				Opacity: 1.0,
+		KeyOverlay: &keyOverlay{
+			hudElementOffset: &hudElementOffset{
+				hudElement: &hudElement{
+					Show:    true,
+					Scale:   1.0,
+					Opacity: 1.0,
+				},
+				XOffset: 0,
+				YOffset: 0,
 			},
-			XOffset: 0,
-			YOffset: 0,
+			Mode:      "osu",
+			HoldBar:   true,
+			KeySize:   42, // + 2*Outline = 46px box, the same size as inputoverlay-key.png
+			Outline:   2,
+			Margin:    24, // same distance from the edge as the osu! key strip
+			BarSpeed:  300,
+			BarLength: 300,
+			Fade:      true,
+			Counter:   false,
 		},
 		ScoreBoard: &scoreBoard{
 			hudElementOffset: &hudElementOffset{
@@ -257,7 +268,7 @@ type gameplay struct {
 	PPCounter               *ppCounter
 	HitCounter              *hitCounter
 	StrainGraph             *strainGraph
-	KeyOverlay              *hudElementOffset
+	KeyOverlay              *keyOverlay
 	ScoreBoard              *scoreBoard
 	Mods                    *mods
 	Boundaries              *boundaries
@@ -309,6 +320,19 @@ type hudElementPosition struct {
 	position  string  `vector:"true" left:"XPosition" right:"YPosition"`
 	XPosition float64 `min:"-10000" max:"10000"`
 	YPosition float64 `min:"-10000" max:"10000"`
+}
+
+type keyOverlay struct {
+	*hudElementOffset
+	Mode     string  `combo:"osu|osu! style (skin strip),stream|Stream overlay (bars travelling up)" tooltip:"osu! style uses the skin's key strip with press counters. Stream overlay mimics Blondazz/KeyOverlay: squares with a letter, bars that travel upwards while a key is held."`
+	HoldBar  bool    `label:"Show key hold duration bar" tooltip:"osu! style only: draws a bar next to a held key, its length proportional to how long the key has been down"`
+	KeySize   float64 `min:"20" max:"400" format:"%.0f px" label:"Key size (stream overlay)"`
+	Outline   float64 `min:"0" max:"40" format:"%.0f px" label:"Border thickness (stream overlay)"`
+	Margin    float64 `min:"0" max:"600" format:"%.0f px" label:"Margin from screen edge (stream overlay)"`
+	BarSpeed  float64 `min:"50" max:"6000" format:"%.0f px/s" label:"Bar speed (stream overlay)"`
+	BarLength float64 `min:"0" max:"2000" format:"%.0f px" label:"Bar length (stream overlay)" tooltip:"How far a bar travels before it disappears. 0 = all the way to the top of the screen."`
+	Fade      bool    `label:"Fade bars near the top (stream overlay)"`
+	Counter   bool    `label:"Show press counter (stream overlay)"`
 }
 
 type hitError struct {

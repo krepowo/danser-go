@@ -66,6 +66,7 @@ type ScoreOverlay struct {
 
 	keyInfos   []*keyInfo
 	keyOverlay *sprite.Manager
+	keyStream  *keyStream
 
 	ScaledWidth  float64
 	ScaledHeight float64
@@ -144,6 +145,10 @@ type keyInfo struct {
 	text                    string
 	count                   int
 	lastPress               float64
+	showCount               bool
+
+	holdStart float64 // normalTime when the key went down, 0 when the key has never been pressed
+	holdEnd   float64 // normalTime when the key went up, 0 while it's still held
 }
 
 func loadFonts() {
@@ -252,42 +257,50 @@ func NewScoreOverlay(ruleset *osu.OsuRuleSet, cursor *graphics.Cursor) *ScoreOve
 
 	overlay.keyOverlay = sprite.NewManager()
 
-	keyBg := sprite.NewSpriteSingle(skin.GetTexture("inputoverlay-background"), 0, vector.NewVec2d(overlay.ScaledWidth, overlay.ScaledHeight/2-64), vector.TopLeft)
-	keyBg.SetScaleV(vector.NewVec2d(1.05, 1))
-	keyBg.ShowForever(true)
-	keyBg.SetRotation(math.Pi / 2)
-
-	overlay.keyOverlay.Add(keyBg)
-
-	var keyNames []string
-	if overlay.lazerScore {
-		keyNames = []string{"B1", "B2", "B3"}
+	if settings.Gameplay.KeyOverlay.Mode == "stream" {
+		overlay.keyStream = newKeyStream(
+			[]string{strings.ToUpper(settings.Input.LeftKey), strings.ToUpper(settings.Input.RightKey)},
+			overlay.ScaledWidth, overlay.ScaledHeight,
+		)
 	} else {
-		keyNames = []string{"K1", "K2", "M1", "M2"}
-	}
+		keyBg := sprite.NewSpriteSingle(skin.GetTexture("inputoverlay-background"), 0, vector.NewVec2d(overlay.ScaledWidth, overlay.ScaledHeight/2-64), vector.TopLeft)
+		keyBg.SetScaleV(vector.NewVec2d(1.05, 1))
+		keyBg.ShowForever(true)
+		keyBg.SetRotation(math.Pi / 2)
 
-	for i, name := range keyNames {
-		posY := overlay.ScaledHeight/2 - 64 + (30.4+float64(i)*47.2)*settings.Gameplay.KeyOverlay.Scale
+		overlay.keyOverlay.Add(keyBg)
 
-		key := sprite.NewSpriteSingle(skin.GetTexture("inputoverlay-key"), 1, vector.NewVec2d(overlay.ScaledWidth-24*settings.Gameplay.KeyOverlay.Scale, posY), vector.Centre)
-		key.ShowForever(true)
-
-		overlay.keyOverlay.Add(key)
-
-		kInfo := &keyInfo{
-			sprite:       key,
-			count:        -1,
-			text:         name,
-			lastPress:    -math.MaxFloat64,
-			baseColor:    color2.NewLA(1, 0),
-			pressedColor: color2.NewIRGBA(255, 222, 0, 0),
+		var keyNames []string
+		if overlay.lazerScore {
+			keyNames = []string{"B1", "B2", "B3"}
+		} else {
+			keyNames = []string{"K1", "K2", "M1", "M2"}
 		}
 
-		if i > 1 {
-			kInfo.pressedColor = color2.NewIRGBA(248, 0, 158, 0)
-		}
+		for i, name := range keyNames {
+			posX, posY := overlay.keyPosition(i, len(keyNames))
 
-		overlay.keyInfos = append(overlay.keyInfos, kInfo)
+			key := sprite.NewSpriteSingle(skin.GetTexture("inputoverlay-key"), 1, vector.NewVec2d(posX, posY), vector.Centre)
+			key.ShowForever(true)
+
+			overlay.keyOverlay.Add(key)
+
+			kInfo := &keyInfo{
+				sprite:       key,
+				count:        -1,
+				text:         name,
+				lastPress:    -math.MaxFloat64,
+				baseColor:    color2.NewLA(1, 0),
+				pressedColor: color2.NewIRGBA(255, 222, 0, 0),
+				showCount:    true,
+			}
+
+			if i > 1 {
+				kInfo.pressedColor = color2.NewIRGBA(248, 0, 158, 0)
+			}
+
+			overlay.keyInfos = append(overlay.keyInfos, kInfo)
+		}
 	}
 
 	overlay.hitErrorMeter = play.NewHitErrorMeter(overlay.ScaledWidth, overlay.ScaledHeight, ruleset.GetBeatMap().Diff)
@@ -477,15 +490,50 @@ func (overlay *ScoreOverlay) clickReceived(c *graphics.Cursor, leftMouse, rightM
 		overlay.customStats.GetStatHolder().AddClick(overlay.audioTime)
 	}
 
+	n := len(overlay.keyInfos)
+
+	if overlay.keyStream != nil {
+		if (leftKb|leftMouse)&osu.Clicked > 0 {
+			overlay.keyStream.press(0)
+		}
+
+		if (rightKb|rightMouse)&osu.Clicked > 0 {
+			overlay.keyStream.press(1)
+		}
+
+		if (leftKb|leftMouse)&osu.Released > 0 {
+			overlay.keyStream.release(0)
+		}
+
+		if (rightKb|rightMouse)&osu.Released > 0 {
+			overlay.keyStream.release(1)
+		}
+
+		return
+	}
+
+	if n == 0 {
+		return
+	}
+
 	if overlay.lazerScore {
 		overlay.processKey(overlay.keyInfos[0], leftMouse|leftKb)
-		overlay.processKey(overlay.keyInfos[1], rightMouse|rightKb)
-		overlay.processKey(overlay.keyInfos[2], smoke)
+
+		if n > 1 {
+			overlay.processKey(overlay.keyInfos[1], rightMouse|rightKb)
+		}
+
+		if n > 2 {
+			overlay.processKey(overlay.keyInfos[2], smoke)
+		}
 	} else {
 		overlay.processKey(overlay.keyInfos[0], leftKb)
 		overlay.processKey(overlay.keyInfos[1], rightKb)
 		overlay.processKey(overlay.keyInfos[2], leftMouse)
-		overlay.processKey(overlay.keyInfos[3], rightMouse)
+
+		if n > 3 {
+			overlay.processKey(overlay.keyInfos[3], rightMouse)
+		}
 	}
 }
 
@@ -498,6 +546,8 @@ func (overlay *ScoreOverlay) processKey(info *keyInfo, action osu.ButtonAction) 
 		info.sprite.AddTransform(animation.NewColorTransform(animation.Color3, easing.OutQuad, time, time+100, info.baseColor, info.pressedColor))
 
 		info.lastPress = time + 100
+		info.holdStart = time
+		info.holdEnd = 0
 
 		if info.count < 0 {
 			info.count = 0
@@ -507,7 +557,9 @@ func (overlay *ScoreOverlay) processKey(info *keyInfo, action osu.ButtonAction) 
 			info.count++
 		}
 
-		info.text = strconv.Itoa(info.count)
+		if info.showCount {
+			info.text = strconv.Itoa(info.count)
+		}
 	}
 
 	if (action)&(osu.Released) > 0 {
@@ -515,6 +567,10 @@ func (overlay *ScoreOverlay) processKey(info *keyInfo, action osu.ButtonAction) 
 		info.sprite.AddTransform(animation.NewSingleTransform(animation.Scale, easing.OutQuad, max(time, info.lastPress), time+100, info.sprite.GetScale().Y, 1.0))
 
 		info.sprite.AddTransform(animation.NewColorTransform(animation.Color3, easing.OutQuad, time, time+100, info.pressedColor, info.baseColor))
+
+		if info.holdStart > 0 {
+			info.holdEnd = time
+		}
 	}
 }
 
@@ -533,6 +589,10 @@ func (overlay *ScoreOverlay) Update(time float64) {
 	overlay.normalTime += delta
 
 	overlay.audioTime = time
+
+	if overlay.keyStream != nil {
+		overlay.keyStream.update(delta)
+	}
 
 	if !overlay.notFirst && time > -settings.Playfield.LeadInHold*1000 {
 		overlay.notFirst = true
@@ -889,12 +949,96 @@ func (overlay *ScoreOverlay) drawScore(batch *batch.QuadBatch, alpha float64) {
 	}
 }
 
+func (overlay *ScoreOverlay) keyPosition(index, total int) (float64, float64) {
+	scale := settings.Gameplay.KeyOverlay.Scale
+
+	return overlay.ScaledWidth - 24*scale, overlay.ScaledHeight/2 - 64 + (30.4+float64(index)*47.2)*scale
+}
+
+// drawKeyHolds draws a bar next to every key whose length is proportional to how long
+// that key is being held, so a held key shows its hold duration at a glance.
+// The bar grows away from the key box: upwards in the compact (bottom-right) layout,
+// leftwards in the classic osu! vertical strip.
+func (overlay *ScoreOverlay) drawKeyHolds(batch *batch.QuadBatch, keyAlpha float64) {
+	if !settings.Gameplay.KeyOverlay.HoldBar {
+		return
+	}
+
+	const (
+		keySize  = 46.0 // inputoverlay-key.png is 46x46
+		pxPerMs  = 0.1  // 100ms of holding = 10px
+		maxBars  = 3.0  // the bar stops growing at 3 key sizes
+		fadeTime = 200.0
+	)
+
+	scale := settings.Gameplay.KeyOverlay.Scale
+	xOff := settings.Gameplay.KeyOverlay.XOffset
+	yOff := settings.Gameplay.KeyOverlay.YOffset
+
+	size := keySize * scale
+	maxLen := maxBars * size
+
+	col := skin.GetColor(skin.InputOverlayText)
+
+	batch.Flush()
+
+	overlay.shapeRenderer.SetCamera(overlay.camera.GetProjectionView())
+	overlay.shapeRenderer.Begin()
+
+	for i, k := range overlay.keyInfos {
+		if k.holdStart <= 0 {
+			continue
+		}
+
+		alpha := keyAlpha * 0.6
+		duration := overlay.normalTime - k.holdStart
+
+		if k.holdEnd > 0 {
+			duration = k.holdEnd - k.holdStart
+
+			if fade := 1.0 - (overlay.normalTime-k.holdEnd)/fadeTime; fade > 0 {
+				alpha *= fade
+			} else {
+				continue
+			}
+		}
+
+		length := min(duration*pxPerMs, maxLen)
+
+		if length < 1 {
+			continue
+		}
+
+		overlay.shapeRenderer.SetColor(float64(col.R), float64(col.G), float64(col.B), alpha)
+
+		posX, posY := overlay.keyPosition(i, len(overlay.keyInfos))
+		posX += xOff
+		posY += yOff
+
+		// grows to the left, away from the right screen edge
+		x1, x2 := float32(posX-size/2-length), float32(posX-size/2)
+		y1, y2 := float32(posY-size/2), float32(posY+size/2)
+
+		overlay.shapeRenderer.DrawQuad(x1, y1, x2, y1, x2, y2, x1, y2)
+	}
+
+	overlay.shapeRenderer.End()
+}
+
 func (overlay *ScoreOverlay) drawKeys(batch *batch.QuadBatch, alpha float64) {
 	keyAlpha := settings.Gameplay.KeyOverlay.Opacity * alpha
 
 	if keyAlpha < 0.001 || !settings.Gameplay.KeyOverlay.Show {
 		return
 	}
+
+	if overlay.keyStream != nil {
+		overlay.keyStream.draw(batch, overlay.shapeRenderer, overlay.camera.GetProjectionView(), overlay.keyFont, keyAlpha)
+
+		return
+	}
+
+	overlay.drawKeyHolds(batch, keyAlpha)
 
 	batch.ResetTransform()
 
@@ -911,11 +1055,10 @@ func (overlay *ScoreOverlay) drawKeys(batch *batch.QuadBatch, alpha float64) {
 	batch.SetColor(float64(col.R), float64(col.G), float64(col.B), keyAlpha)
 
 	for i, k := range overlay.keyInfos {
-		posX := overlay.ScaledWidth - 24*keyScale
-		posY := overlay.ScaledHeight/2 - 64 + (30.4+float64(i)*47.2)*keyScale
+		posX, posY := overlay.keyPosition(i, len(overlay.keyInfos))
 		scale := k.sprite.GetScale().Y * keyScale
 
-		if k.count < 0 || overlay.scoreEFont == nil {
+		if !k.showCount || k.count < 0 || overlay.scoreEFont == nil {
 			overlay.keyFont.DrawOrigin(batch, posX, posY, vector.Centre, scale*14, true, k.text)
 		} else {
 			overlay.scoreEFont.Overlap = 1.6
